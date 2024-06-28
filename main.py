@@ -1,51 +1,73 @@
 # Context; a bot for simple task management
 
-from typing import Final
+import discord
+from discord.ext import commands, tasks
+from datetime import datetime, timedelta
+import asyncio
 import os
 from dotenv import load_dotenv
-from discord import Intents, Client, Message
 from responses import get_reponse
 
+# Load the token from .env file
 load_dotenv()
-TOKEN: Final[str] = os.getenv('DISCORD_TOKEN')
+TOKEN = os.getenv('DISCORD_TOKEN')
 
-intents: Intents = Intents.default()
-intents.message_content = True
-client: Client = Client(intents=intents)
+# Set up the bot
+intents = discord.Intents.default()
+bot = commands.Bot(command_prefix='!', intents=intents)
 
-async def send_message(message: Message, user_message: str) -> None:
-    if not user_message:
-        print('(Message was empty because intents probably were not enabled.)')
-        return
-    
-    #if is_private := user_message[0] == '?':
-    #    user_message = user_message[1:]
+# Dictionary to store reminders
+reminders = {}
 
-    try:
-        response: str = get_reponse(user_message)
-        await message.channel.send(response)
-        #await message.author.send(response) if is_private else 
-    except Exception as e:
-        print(e)
 
-@client.event
-async def on_ready() -> None:
-    print(f'{client.user} is running!')
+@bot.event
+async def on_ready():
+    print(f'Bot connected as {bot.user}')
 
-@client.event
-async def on_message(message: Message) -> None:
-    if message.author == client.user:
+
+@bot.command(name='remind')
+async def remind(ctx, date: str, time: str, *, event: str):
+    # Parse date and time
+    reminder_time = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M")
+    current_time = datetime.now()
+
+    if reminder_time < current_time:
+        await ctx.send("You can't set a reminder in the past!")
         return
 
-    username: str = str(message.author)
-    user_message: str = message.content
-    channel: str = str(message.channel)
+    # Calculate the delay
+    delay = (reminder_time - current_time).totalSeconds()
 
-    print(f'[{channel}] {username}: "{user_message}"')
-    await send_message(message, user_message)
+    # Store the reminder
+    reminders[(ctx.author.id, reminder_time)] = event
 
-def main() -> None:
-    client.run(token=TOKEN)
+    # Schedule the reminder
+    await ctx.send(f"Reminder set for {reminder_time} for event: {event}")
+    await asyncio.sleep(delay)
+    await ctx.send(f"Reminder: {event}, {ctx.author.mention}")
 
-if __name__ == '__main__':
-    main()
+
+@bot.command(name='listreminders')
+async def list_reminders(ctx):
+    user_reminders = [
+        f"{time}: {event}" for (user, time), event in reminders.items()
+        if user == ctx.author.id
+    ]
+    if not user_reminders:
+        await ctx.send("You have no reminders set.")
+    else:
+        await ctx.send("\n".join(user_reminders))
+
+
+@bot.command(name='deletereminder')
+async def delete_reminder(ctx, date: str, time: str):
+    reminder_time = datetime.strptime(f"{date} {time}", "%Y-%m-%d %H:%M")
+    key = (ctx.author.id, reminder_time)
+    if key in reminders:
+        del reminders[key]
+        await ctx.send("Reminder deleted.")
+    else:
+        await ctx.send("No reminder found for that date and time.")
+
+
+bot.run(TOKEN)
